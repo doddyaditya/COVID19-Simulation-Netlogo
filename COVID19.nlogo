@@ -1,30 +1,74 @@
-globals [positive negative populations death]
-turtles-own [num_positive_days num_treatened_days untreatened]
+globals [
+  populations
+  death
+  init_people
+  is_there_positive?
+  is_there_cluster?
+  cluster_coordinate
+  vaccine_quota
+]
+
+turtles-own [
+  num_interact_days
+  num_treated_days
+  have_vaccine?
+  untreated?
+  ever_interact_with_positive?
+  ever_pass_cluster?
+]
 
 to setup
   clear-all
   reset-ticks
+  set init_people []
+  set cluster_coordinate []
+  set vaccine_quota ((%vaccination * population / 100) - num_cluster)
   create-turtles population
   [
     setxy random-xcor random-ycor
     set shape "person"
     set color green
-    set num_positive_days 0
-    set num_treatened_days 0
-    set untreatened true
-  ]
-  repeat 4
-  [
-    ask turtle random population
-    [
-      set color red
-    ]
+    set num_interact_days 0
+    set num_treated_days 0
+    set have_vaccine? false
+    set untreated? true
+    set ever_interact_with_positive? false
+    set ever_pass_cluster? false
   ]
   draw-grid
+  let cluster_left num_cluster
+  let colors base-colors
+  while [cluster_left > 0]
+  [
+    set is_there_cluster? false
+    ask turtle random population
+    [
+      foreach cluster_coordinate
+      [
+        [coordinate] ->
+          ifelse (abs ((item 0 coordinate) - (pxcor)) >= (2 * radius)) or (abs ((item 1 coordinate) - (pycor)) >= (2 * radius))
+          [
+            ; do nothing
+          ]
+          [
+            set is_there_cluster? true
+          ]
+      ]
+      if not is_there_cluster?
+      [
+        draw-cluster pxcor pycor
+        set cluster_left cluster_left - 1
+        set cluster_coordinate lput (list pxcor pycor) cluster_coordinate
+      ]
+      set color one-of remove red remove green colors
+      set colors remove color colors
+      set init_people lput who init_people
+    ]
+  ]
+  vaccinate
   set populations population
   set death 0
-  set positive (count turtles with [color = red])
-  set negative (populations - positive)
+  set is_there_positive? false
 end
 
 to draw-grid
@@ -46,18 +90,189 @@ to draw-grid
   ]
 end
 
-to cure
-  ask turtles with [color = red and num_treatened_days >= 14]
+to draw-cluster [cx cy]
+  ask patch cx cy
   [
-    ifelse random 100 < cure_rate
+    sprout 1
     [
-      set color green
-      set num_positive_days 0
-      set num_treatened_days 0
-      set untreatened true
+      set color yellow
+      set heading 0
+      fd radius
+      lt 90
+      pen-down
+      repeat 4
+      [
+        fd radius
+        lt 90
+        fd radius
+      ]
+      die
+    ]
+  ]
+end
+
+to vaccinate
+  while [vaccine_quota > 0]
+  [
+    ask turtle random population
+    [
+      if (color != blue) and (not have_vaccine?)
+      [
+        set have_vaccine? true
+        set vaccine_quota (vaccine_quota - 1)
+      ]
+    ]
+  ]
+end
+
+to check_position [who_turtle]
+  foreach cluster_coordinate
+  [
+    [coordinate] ->
+    ask patch (item 0 coordinate) (item 1 coordinate)
+    [
+      sprout 1
+      [
+        set heading 0
+        fd (radius - 0.5)
+        lt 90
+        fd (radius - 0.5)
+        set heading 90
+        let counter 1
+        repeat (2 * radius)
+        [
+          if any? turtles-here with [who = who_turtle]
+          [
+            ask turtle who_turtle
+            [
+              set ever_pass_cluster? true
+            ]
+          ]
+          repeat ((2 * radius) - 1)
+          [
+            fd 1
+            if any? turtles-here with [who = who_turtle]
+            [
+              ask turtle who_turtle
+              [
+                set ever_pass_cluster? true
+              ]
+            ]
+          ]
+          ifelse (counter mod 2) != 0
+          [
+            rt 90
+            fd 1
+            rt 90
+          ]
+          [
+            lt 90
+            fd 1
+            lt 90
+          ]
+          set counter (counter + 1)
+        ]
+        die
+      ]
+    ]
+  ]
+end
+
+to infect
+  set is_there_positive? false
+  ask turtles with [color != green and color != red]
+  [
+    let current_turtle who
+    let current_color color
+    ask other turtles-here with [color = green]
+    [
+      set color current_color
+      create-link-with turtle current_turtle
+      let found? false
+      check_position who
+      if found?
+      [
+        set ever_pass_cluster? true
+      ]
+    ]
+    ask link-neighbors
+    [
+      ask turtle who
+      [
+        if color = red
+        [
+          set is_there_positive? true
+        ]
+      ]
+    ]
+    if is_there_positive?
+    [
+      set ever_interact_with_positive? true
+    ]
+  ]
+  ask turtles with [(color != green and color != red) and num_interact_days >= 14]
+  [
+    let infectiousness_rate %infectiousness
+    ifelse ever_interact_with_positive?
+    [
+      if ever_pass_cluster?
+      [
+        set infectiousness_rate (infectiousness_rate + 10)
+      ]
+      if have_vaccine?
+      [
+        set infectiousness_rate 5
+      ]
+      ifelse random 100 < (infectiousness_rate)
+      [
+        set color red
+      ]
+      [
+        ask my-links
+        [
+          die
+        ]
+        set color green
+        set num_treated_days 0
+        set num_interact_days 0
+        set untreated? true
+        set ever_interact_with_positive? false
+        set ever_pass_cluster? false
+      ]
     ]
     [
-      if random 100 < death_rate
+      ask my-links
+      [
+       die
+      ]
+      set color green
+      set num_treated_days 0
+      set num_interact_days 0
+      set untreated? true
+      set ever_interact_with_positive? false
+      set ever_pass_cluster? false
+    ]
+  ]
+end
+
+to cure
+  ask turtles with [color = red and num_treated_days >= 28]
+  [
+    ifelse random-float 100 < %cure
+    [
+      ask my-links
+      [
+       die
+      ]
+      set color green
+      set num_treated_days 0
+      set num_interact_days 0
+      set untreated? true
+      set ever_interact_with_positive? false
+      set ever_pass_cluster? false
+    ]
+    [
+      if random-float 100 < %death
       [
         set populations (populations - 1)
         set death (death + 1)
@@ -68,56 +283,58 @@ to cure
 end
 
 to treat
-  ask turtles with [color = red and untreatened = true and num_positive_days >= 14]
+  ask turtles with [color = red and untreated?]
   [
-    set untreatened false
+    set untreated? false
   ]
 end
 
-to infect
-  ask turtles with [color = red and untreatened = true]
+to increment_num_days
+  ask turtles with [color = red and not untreated?]
   [
-    ask other turtles-here
-    [
-      if random 100 < infectiousness_rate
-      [
-        set color red
-      ]
-    ]
+    set num_treated_days (num_treated_days + 1)
   ]
-end
-
-to increment_num_treatened_days
-  ask turtles with [color = red and untreatened = false]
+  ask turtles with [color != green and color != red]
   [
-    set num_treatened_days (num_treatened_days + 1)
-  ]
-end
-
-to increment_num_positive_days
-  ask turtles with [color = red and untreatened = true]
-  [
-    set num_positive_days (num_positive_days + 1)
+    set num_interact_days (num_interact_days + 1)
   ]
 end
 
 to go
-  ask turtles
+  if (count turtles with [color = red] = populations) or (count turtles with [color = green] = populations) or (ticks > 14 and not any? turtles with [color = red])
   [
-    rt random 100 lt random 100 fd 1
+    stop
+  ]
+  ask turtles with [color != red]
+  [
+    rt random-float 180 lt random-float 180 fd 1
+  ]
+  foreach init_people
+  [
+    ? -> ask turtle ?
+    [
+      if num_interact_days >= 14
+      [
+        set color red
+        set init_people remove ? init_people
+      ]
+    ]
   ]
   infect
   treat
   cure
-  increment_num_positive_days
-  increment_num_treatened_days
-  set positive (count turtles with [color = red])
-  set negative (populations - positive)
-  if (positive = populations) or (negative = populations)
-  [
-    stop
-  ]
+  increment_num_days
   tick
+end
+
+to-report %infected
+  ifelse any? turtles
+  [
+    report count turtles with [color = red]
+  ]
+  [
+    report 0
+  ]
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -148,10 +365,10 @@ ticks
 30.0
 
 BUTTON
+16
+10
+79
 43
-27
-106
-60
 NIL
 setup
 NIL
@@ -165,10 +382,10 @@ NIL
 1
 
 BUTTON
-43
-78
-106
-111
+16
+61
+79
+94
 NIL
 go\n
 T
@@ -182,25 +399,25 @@ NIL
 1
 
 SLIDER
-43
-193
-215
-226
-infectiousness_rate
-infectiousness_rate
+16
+176
+188
+209
+%infectiousness
+%infectiousness
 0
 100
-40.0
+30.0
 1
 1
 NIL
 HORIZONTAL
 
 MONITOR
-611
-19
-679
-64
+497
+10
+610
+55
 Hari
 ticks
 17
@@ -208,21 +425,21 @@ ticks
 11
 
 MONITOR
-479
-19
-610
-64
+364
+10
+496
+55
 Jumlah Terinfeksi
-positive
+%infected
 17
 1
 11
 
 PLOT
-479
-65
-828
-285
+364
+56
+829
+313
 Persebaran COVID19
 Hari
 Populasi
@@ -232,36 +449,37 @@ Populasi
 0.0
 true
 true
-"" ""
+"set-plot-y-range 0 (population + 50)" ""
 PENS
-"Positif COVID19" 1.0 0 -2674135 true "" "plot positive"
-"Negatif COVID19" 1.0 0 -13840069 true "" "plot negative"
+"Negatif COVID19" 1.0 0 -10899396 true "" "plot count turtles with [color = green]"
+"Positif COVID19" 1.0 0 -2674135 true "" "plot count turtles with [color = red]"
+"Pernah Berinteraksi" 1.0 0 -1184463 true "" "plot count turtles with [color != green and color != red]"
 
 TEXTBOX
-231
-143
-381
-161
+204
+126
+354
+144
 Jumlah populasi
 11
 0.0
 1
 
 TEXTBOX
-232
-194
-370
-222
+205
+177
+343
+205
 Tingkat penularan dalam persentase (%)
 11
 0.0
 1
 
 INPUTBOX
-43
-121
-215
-181
+16
+104
+188
+164
 population
 300.0
 1
@@ -269,12 +487,12 @@ population
 Number
 
 SLIDER
-43
-239
-215
-272
-cure_rate
-cure_rate
+16
+222
+188
+255
+%cure
+%cure
 0
 100
 80.0
@@ -284,45 +502,45 @@ NIL
 HORIZONTAL
 
 TEXTBOX
-232
-242
-382
-270
+205
+225
+355
+253
 Tingkat penyembuhan dalam persentase (%)
 11
 0.0
 1
 
 SLIDER
-43
-286
-215
-319
-death_rate
-death_rate
+16
+269
+188
+302
+%death
+%death
 0
 100
-5.0
+10.0
 1
 1
 NIL
 HORIZONTAL
 
 TEXTBOX
-233
-287
-383
-315
+206
+270
+356
+298
 Tingkat kematian dalam persentase (%)
 11
 0.0
 1
 
 MONITOR
-680
-19
-750
-64
+611
+10
+721
+55
 Populasi
 populations
 17
@@ -330,15 +548,90 @@ populations
 11
 
 MONITOR
-751
-19
-828
-64
+722
+10
+829
+55
 Kematian
 death
 17
 1
 11
+
+SLIDER
+16
+317
+188
+350
+%vaccination
+%vaccination
+0
+100
+20.0
+1
+1
+NIL
+HORIZONTAL
+
+TEXTBOX
+206
+315
+356
+343
+Tingkat vaksinasi dalam persentase (%)
+11
+0.0
+1
+
+SLIDER
+17
+414
+189
+447
+num_cluster
+num_cluster
+1
+4
+2.0
+1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+17
+365
+189
+398
+radius
+radius
+2.5
+5.5
+2.5
+1
+1
+NIL
+HORIZONTAL
+
+TEXTBOX
+207
+367
+357
+385
+Radius cluster
+11
+0.0
+1
+
+TEXTBOX
+207
+413
+357
+431
+Jumlah cluster
+11
+0.0
+1
 
 @#$#@#$#@
 ## WHAT IS IT?
